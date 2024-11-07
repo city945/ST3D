@@ -67,6 +67,7 @@ def clean_data(gt_anno, dt_anno, current_class, difficulty):
     # for i in range(num_gt):
         if gt_anno["name"][i] == "DontCare":
             dc_bboxes.append(gt_anno["bbox"][i])
+
     for i in range(num_dt):
         if (dt_anno["name"][i].lower() == current_cls_name):
             valid_class = 1
