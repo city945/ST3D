@@ -42,6 +42,7 @@ def parse_config():
     parser.add_argument('--max_waiting_mins', type=int, default=0, help='max waiting minutes')
     parser.add_argument('--start_epoch', type=int, default=0, help='')
     parser.add_argument('--save_to_file', action='store_true', default=False, help='')
+    parser.add_argument('--debug', action='store_true', default=False, help='debug setting')
 
     args = parser.parse_args()
 
@@ -61,9 +62,7 @@ def main():
         dist_train = False
         total_gpus = 1
     else:
-        total_gpus, cfg.LOCAL_RANK = getattr(common_utils, 'init_dist_%s' % args.launcher)(
-            args.tcp_port, args.local_rank, backend='nccl'
-        )
+        total_gpus, cfg.LOCAL_RANK = common_utils.init_dist_pytorch()
         dist_train = True
 
     if args.batch_size is None:
@@ -76,6 +75,15 @@ def main():
 
     if args.fix_random_seed:
         common_utils.set_random_seed(666)
+    if args.debug:
+        args.batch_size = 1 if args.batch_size is None else args.batch_size
+        args.epochs = 1 if args.epochs is None else args.epochs
+        args.workers = 0
+        args.extra_tag = 'debug'
+        cfg.DATA_CONFIG.DEBUG = True
+        if cfg.get('DATA_CONFIG_TAR', None):
+            cfg.DATA_CONFIG_TAR.DEBUG = True
+        common_utils.set_random_seed(666 + cfg.LOCAL_RANK)
 
     output_dir = cfg.ROOT_DIR / 'output' / cfg.EXP_GROUP_PATH / cfg.TAG / args.extra_tag
     ckpt_dir = output_dir / 'ckpt'
