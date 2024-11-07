@@ -12,3 +12,15 @@ venv/
 *.pkl
 *.zip
 *.bin
+
+.trash
+.vscode
+data
+model_zoo
+output
+thirdparty
+pyrightconfig.json
+
+!*.yaml
+!*.sh
+version.py
