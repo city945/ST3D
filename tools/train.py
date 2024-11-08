@@ -17,6 +17,7 @@ from pcdet.models import build_network, model_fn_decorator
 from pcdet.utils import common_utils
 from train_utils.optimization import build_optimizer, build_scheduler
 from train_utils.train_utils import train_model
+from train_utils.train_st_utils import train_model_st
 
 
 def parse_config():
@@ -90,6 +91,8 @@ def main():
 
     output_dir = cfg.ROOT_DIR / 'output' / cfg.EXP_GROUP_PATH / cfg.TAG / args.extra_tag
     ckpt_dir = output_dir / 'ckpt'
+    ps_label_dir = output_dir / 'ps_label'
+    ps_label_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -122,7 +125,13 @@ def main():
         merge_all_iters_to_one_epoch=args.merge_all_iters_to_one_epoch,
         total_epochs=args.epochs
     )
-    target_set = target_loader = target_sampler = None
+    if cfg.get('SELF_TRAIN', None):
+        target_set, target_loader, target_sampler = build_dataloader(
+            cfg.DATA_CONFIG_TAR, cfg.DATA_CONFIG_TAR.CLASS_NAMES, args.batch_size,
+            dist_train, workers=args.workers, logger=logger, training=True
+        )
+    else:
+        target_set = target_loader = target_sampler = None
 
     model = build_network(model_cfg=cfg.MODEL, num_class=len(cfg.CLASS_NAMES),
                           dataset=source_set)
@@ -155,15 +164,25 @@ def main():
         model = nn.parallel.DistributedDataParallel(model, device_ids=[cfg.LOCAL_RANK % torch.cuda.device_count()])
     logger.info(model)
 
+    if cfg.get('SELF_TRAIN', None):
+        total_iters_each_epoch = len(target_loader) if not args.merge_all_iters_to_one_epoch \
+                                            else len(target_loader) // args.epochs
+    else:
+        total_iters_each_epoch = len(source_loader) if not args.merge_all_iters_to_one_epoch \
+            else len(source_loader) // args.epochs
+
     lr_scheduler, lr_warmup_scheduler = build_scheduler(
-        optimizer, total_iters_each_epoch=len(source_loader), total_epochs=args.epochs,
+        optimizer, total_iters_each_epoch=total_iters_each_epoch, total_epochs=args.epochs,
         last_epoch=last_epoch, optim_cfg=cfg.OPTIMIZATION
     )
+
+    # select proper trainer
+    train_func = train_model_st if cfg.get('SELF_TRAIN', None) else train_model
 
     # -----------------------start training---------------------------
     logger.info('**********************Start training %s/%s(%s)**********************'
                 % (cfg.EXP_GROUP_PATH, cfg.TAG, args.extra_tag))
-    train_model(
+    train_func(
         model,
         optimizer,
         source_loader,
@@ -177,6 +196,7 @@ def main():
         rank=cfg.LOCAL_RANK,
         tb_log=tb_log,
         ckpt_save_dir=ckpt_dir,
+        ps_label_dir=ps_label_dir,
         source_sampler=source_sampler,
         target_sampler=target_sampler,
         lr_warmup_scheduler=lr_warmup_scheduler,
@@ -184,6 +204,7 @@ def main():
         max_ckpt_save_num=args.max_ckpt_save_num,
         merge_all_iters_to_one_epoch=args.merge_all_iters_to_one_epoch,
         logger=logger,
+        ema_model=None
     )
 
     logger.info('**********************End training %s/%s(%s)**********************\n\n\n'

@@ -147,6 +147,13 @@ class NuScenesDataset(DatasetTemplate):
             if self.dataset_cfg.get('SHIFT_COOR', None):
                 input_dict['gt_boxes'][:, 0:3] += self.dataset_cfg.SHIFT_COOR
 
+            if self.dataset_cfg.get('USE_PSEUDO_LABEL', None) and self.training:
+                input_dict['gt_boxes'] = None
+
+            # for debug only
+            # gt_boxes_mask = np.array([n in self.class_names for n in input_dict['gt_names']], dtype=np.bool_)
+            # debug_dict = {'gt_boxes': copy.deepcopy(input_dict['gt_boxes'][gt_boxes_mask])}
+
         if self.dataset_cfg.get('FOV_POINTS_ONLY', None):
             input_dict['points'] = self.extract_fov_data(
                 input_dict['points'], self.dataset_cfg.FOV_DEGREE, self.dataset_cfg.FOV_ANGLE
@@ -159,13 +166,16 @@ class NuScenesDataset(DatasetTemplate):
                     'gt_names': input_dict['gt_names'][fov_gt_flag],
                     'gt_boxes': input_dict['gt_boxes'][fov_gt_flag],
                 })
-        if self.dataset_cfg.get('SET_NAN_VELOCITY_TO_ZEROS', False):
+
+        if self.dataset_cfg.get('USE_PSEUDO_LABEL', None) and self.training:
+            self.fill_pseudo_labels(input_dict)
+
+        if self.dataset_cfg.get('SET_NAN_VELOCITY_TO_ZEROS', False) and not self.dataset_cfg.get('USE_PSEUDO_LABEL', None):
             gt_boxes = input_dict['gt_boxes']
             gt_boxes[np.isnan(gt_boxes)] = 0
             input_dict['gt_boxes'] = gt_boxes
 
-        # [0, 1, 2, 3, 4, 5, 6, -1] -> [0, 1, 2, 3, 4, 5, 6] 强制去除框的其他属性
-        if not self.dataset_cfg.PRED_VELOCITY and 'gt_boxes' in input_dict:
+        if not self.dataset_cfg.PRED_VELOCITY and 'gt_boxes' in input_dict and not self.dataset_cfg.get('USE_PSEUDO_LABEL', None):
             input_dict['gt_boxes'] = input_dict['gt_boxes'][:, [0, 1, 2, 3, 4, 5, 6]]
 
         data_dict = self.prepare_data(data_dict=input_dict)

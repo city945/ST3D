@@ -176,3 +176,11 @@ class DataProcessor(object):
             data_dict = cur_processor(data_dict=data_dict)
 
         return data_dict
+
+    def eval(self):
+        self.training = False
+        self.mode = 'test'
+
+    def train(self):
+        self.training = True
+        self.mode = 'train'

@@ -1,4 +1,5 @@
 import torch
+import copy
 from pathlib import Path
 from collections import defaultdict
 import numpy as np
@@ -6,7 +7,7 @@ import torch.utils.data as torch_data
 from .augmentor.data_augmentor import DataAugmentor
 from .processor.data_processor import DataProcessor
 from .processor.point_feature_encoder import PointFeatureEncoder
-from ..utils import common_utils
+from ..utils import common_utils, self_training_utils
 from ..ops.roiaware_pool3d import roiaware_pool3d_utils
 
 
@@ -109,6 +110,28 @@ class DatasetTemplate(torch_data.Dataset):
         fov_gt_mask = ((np.abs(gt_angle) < half_fov_degree) & (gt_boxes_lidar[:, 0] > 0))
         return fov_gt_mask
 
+    def fill_pseudo_labels(self, input_dict):
+        gt_boxes = self_training_utils.load_ps_label(input_dict['frame_id'])
+        gt_scores = gt_boxes[:, 8]
+        gt_classes = gt_boxes[:, 7]
+        gt_boxes = gt_boxes[:, :7]
+
+        # only suitable for only one classes, generating gt_names for prepare data
+        gt_names = np.array(self.class_names)[np.abs(gt_classes.astype(np.int32)) - 1]
+
+        input_dict['gt_boxes'] = gt_boxes
+        input_dict['gt_names'] = gt_names
+        input_dict['gt_classes'] = gt_classes
+        input_dict['gt_scores'] = gt_scores
+        input_dict['pos_ps_bbox'] = np.zeros((len(self.class_names)), dtype=np.float32)
+        input_dict['ign_ps_bbox'] = np.zeros((len(self.class_names)), dtype=np.float32)
+        for i in range(len(self.class_names)):
+            num_total_boxes = (np.abs(gt_classes) == (i+1)).sum()
+            num_ps_bbox = (gt_classes == (i+1)).sum()
+            input_dict['pos_ps_bbox'][i] = num_ps_bbox
+            input_dict['ign_ps_bbox'][i] = num_total_boxes - num_ps_bbox
+
+        input_dict.pop('num_points_in_gt', None)
 
     def merge_all_iters_to_one_epoch(self, merge=True, epochs=None):
         if merge:
@@ -184,7 +207,12 @@ class DatasetTemplate(torch_data.Dataset):
             selected = common_utils.keep_arrays_by_name(data_dict['gt_names'], self.class_names)
             data_dict['gt_boxes'] = data_dict['gt_boxes'][selected]
             data_dict['gt_names'] = data_dict['gt_names'][selected]
-            gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
+            # for pseudo label has ignore labels.
+            if 'gt_classes' not in data_dict:
+                gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
+            else:
+                gt_classes = data_dict['gt_classes'][selected]
+                data_dict['gt_scores'] = data_dict['gt_scores'][selected]
             gt_boxes = np.concatenate((data_dict['gt_boxes'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1)
             data_dict['gt_boxes'] = gt_boxes
 
@@ -199,6 +227,7 @@ class DatasetTemplate(torch_data.Dataset):
             return self.__getitem__(new_index)
 
         data_dict.pop('gt_names', None)
+        data_dict.pop('gt_classes', None)
 
         return data_dict
 
@@ -227,6 +256,12 @@ class DatasetTemplate(torch_data.Dataset):
                     for k in range(batch_size):
                         batch_gt_boxes3d[k, :val[k].__len__(), :] = val[k]
                     ret[key] = batch_gt_boxes3d
+                elif key in ['gt_scores']:
+                    max_gt = max([len(x) for x in val])
+                    batch_scores = np.zeros((batch_size, max_gt), dtype=np.float32)
+                    for k in range(batch_size):
+                        batch_scores[k, :val[k].__len__()] = val[k]
+                    ret[key] = batch_scores
                 else:
                     ret[key] = np.stack(val, axis=0)
             except:
@@ -235,3 +270,11 @@ class DatasetTemplate(torch_data.Dataset):
 
         ret['batch_size'] = batch_size
         return ret
+
+    def eval(self):
+        self.training = False
+        self.data_processor.eval()
+
+    def train(self):
+        self.training = True
+        self.data_processor.train()

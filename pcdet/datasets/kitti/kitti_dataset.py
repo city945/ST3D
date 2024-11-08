@@ -394,9 +394,20 @@ class KittiDataset(DatasetTemplate):
                 'gt_names': gt_names,
                 'gt_boxes': gt_boxes_lidar
             })
+            if self.dataset_cfg.get('USE_PSEUDO_LABEL', None) and self.training:
+                input_dict['gt_boxes'] = None
+
+            # for debug only
+            # gt_boxes_mask = np.array([n in self.class_names for n in input_dict['gt_names']], dtype=np.bool_)
+            # debug_dict = {'gt_boxes': copy.deepcopy(gt_boxes_lidar[gt_boxes_mask])}
+
             road_plane = self.get_road_plane(sample_idx)
             if road_plane is not None:
                 input_dict['road_plane'] = road_plane
+
+        # load saved pseudo label for unlabel data
+        if self.dataset_cfg.get('USE_PSEUDO_LABEL', None) and self.training:
+            self.fill_pseudo_labels(input_dict)
 
         data_dict = self.prepare_data(data_dict=input_dict)
 
