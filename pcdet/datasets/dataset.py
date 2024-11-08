@@ -1,13 +1,13 @@
-from collections import defaultdict
+import torch
 from pathlib import Path
-
+from collections import defaultdict
 import numpy as np
 import torch.utils.data as torch_data
-
-from ..utils import common_utils
 from .augmentor.data_augmentor import DataAugmentor
 from .processor.data_processor import DataProcessor
 from .processor.point_feature_encoder import PointFeatureEncoder
+from ..utils import common_utils
+from ..ops.roiaware_pool3d import roiaware_pool3d_utils
 
 
 class DatasetTemplate(torch_data.Dataset):
@@ -116,6 +116,20 @@ class DatasetTemplate(torch_data.Dataset):
                 ...
         """
         if self.training:
+            # filter gt_boxes without points
+            num_points_in_gt = data_dict.get('num_points_in_gt', None)
+            if num_points_in_gt is None:
+                num_points_in_gt = roiaware_pool3d_utils.points_in_boxes_cpu(
+                    torch.from_numpy(data_dict['points'][:, :3]),
+                    torch.from_numpy(data_dict['gt_boxes'][:, :7])).numpy().sum(axis=1)
+
+            mask = (num_points_in_gt >= self.dataset_cfg.get('MIN_POINTS_OF_GT', 1))
+            data_dict['gt_boxes'] = data_dict['gt_boxes'][mask]
+            data_dict['gt_names'] = data_dict['gt_names'][mask]
+            if 'gt_classes' in data_dict:
+                data_dict['gt_classes'] = data_dict['gt_classes'][mask]
+                data_dict['gt_scores'] = data_dict['gt_scores'][mask]
+
             assert 'gt_boxes' in data_dict, 'gt_boxes should be provided for training'
             gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool_)
 
@@ -125,9 +139,6 @@ class DatasetTemplate(torch_data.Dataset):
                     'gt_boxes_mask': gt_boxes_mask
                 }
             )
-            if len(data_dict['gt_boxes']) == 0:
-                new_index = np.random.randint(self.__len__())
-                return self.__getitem__(new_index)
 
         if data_dict.get('gt_boxes', None) is not None:
             selected = common_utils.keep_arrays_by_name(data_dict['gt_names'], self.class_names)
@@ -142,6 +153,11 @@ class DatasetTemplate(torch_data.Dataset):
         data_dict = self.data_processor.forward(
             data_dict=data_dict
         )
+
+        if self.training and len(data_dict['gt_boxes']) == 0:
+            new_index = np.random.randint(self.__len__())
+            return self.__getitem__(new_index)
+
         data_dict.pop('gt_names', None)
 
         return data_dict

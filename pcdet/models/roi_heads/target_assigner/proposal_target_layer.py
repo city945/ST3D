@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import torch.nn as nn
-
 from ....ops.iou3d_nms import iou3d_nms_utils
 
 
@@ -51,6 +50,8 @@ class ProposalTargetLayer(nn.Module):
             batch_cls_labels = (fg_mask > 0).float()
             batch_cls_labels[interval_mask] = \
                 (batch_roi_ious[interval_mask] - iou_bg_thresh) / (iou_fg_thresh - iou_bg_thresh)
+        elif self.roi_sampler_cfg.CLS_SCORE_TYPE == 'raw_roi_iou':
+            batch_cls_labels = batch_roi_ious
         else:
             raise NotImplementedError
 
@@ -105,7 +106,6 @@ class ProposalTargetLayer(nn.Module):
                 max_overlaps, gt_assignment = torch.max(iou3d, dim=1)
 
             sampled_inds = self.subsample_rois(max_overlaps=max_overlaps)
-
             batch_rois[index] = cur_roi[sampled_inds]
             batch_roi_labels[index] = cur_roi_labels[sampled_inds]
             batch_roi_ious[index] = max_overlaps[sampled_inds]

@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 
 from ...ops.roiaware_pool3d import roiaware_pool3d_utils
-from ...utils import common_utils
+from ...utils import common_utils, box_utils
 from ..dataset import DatasetTemplate
 
 
@@ -75,14 +75,15 @@ class NuScenesDataset(DatasetTemplate):
 
         return sampled_infos
 
-    def get_sweep(self, sweep_info):
-        def remove_ego_points(points, center_radius=1.0):
-            mask = ~((np.abs(points[:, 0]) < center_radius) & (np.abs(points[:, 1]) < center_radius))
-            return points[mask]
+    @staticmethod
+    def remove_ego_points(points, center_radius=1.0):
+        mask = ~((np.abs(points[:, 0]) < center_radius) & (np.abs(points[:, 1]) < center_radius))
+        return points[mask]
 
+    def get_sweep(self, sweep_info):
         lidar_path = self.root_path / sweep_info['lidar_path']
         points_sweep = np.fromfile(str(lidar_path), dtype=np.float32, count=-1).reshape([-1, 5])[:, :4]
-        points_sweep = remove_ego_points(points_sweep).T
+        points_sweep = self.remove_ego_points(points_sweep).T
         if sweep_info['transform_matrix'] is not None:
             num_points = points_sweep.shape[1]
             points_sweep[:3, :] = sweep_info['transform_matrix'].dot(
@@ -95,7 +96,7 @@ class NuScenesDataset(DatasetTemplate):
         info = self.infos[index]
         lidar_path = self.root_path / info['lidar_path']
         points = np.fromfile(str(lidar_path), dtype=np.float32, count=-1).reshape([-1, 5])[:, :4]
-
+        points = self.remove_ego_points(points, center_radius=1.5)
         sweep_points_list = [points]
         sweep_times_list = [np.zeros((points.shape[0], 1))]
 
@@ -123,6 +124,9 @@ class NuScenesDataset(DatasetTemplate):
         info = copy.deepcopy(self.infos[index])
         points = self.get_lidar_with_sweeps(index, max_sweeps=self.dataset_cfg.MAX_SWEEPS)
 
+        if self.dataset_cfg.get('SHIFT_COOR', None):
+            points[:, 0:3] += np.array(self.dataset_cfg.SHIFT_COOR, dtype=np.float32)
+
         input_dict = {
             'points': points,
             'frame_id': Path(info['lidar_path']).stem,
@@ -140,6 +144,9 @@ class NuScenesDataset(DatasetTemplate):
                 'gt_boxes': info['gt_boxes'] if mask is None else info['gt_boxes'][mask]
             })
 
+            if self.dataset_cfg.get('SHIFT_COOR', None):
+                input_dict['gt_boxes'][:, 0:3] += self.dataset_cfg.SHIFT_COOR
+
         data_dict = self.prepare_data(data_dict=input_dict)
 
         if self.dataset_cfg.get('SET_NAN_VELOCITY_TO_ZEROS', False):
@@ -152,8 +159,7 @@ class NuScenesDataset(DatasetTemplate):
 
         return data_dict
 
-    @staticmethod
-    def generate_prediction_dicts(batch_dict, pred_dicts, class_names, output_path=None):
+    def generate_prediction_dicts(self, batch_dict, pred_dicts, class_names, output_path=None):
         """
         Args:
             batch_dict:
@@ -181,6 +187,9 @@ class NuScenesDataset(DatasetTemplate):
             if pred_scores.shape[0] == 0:
                 return pred_dict
 
+            if self.dataset_cfg.get('SHIFT_COOR', None):
+                pred_boxes[:, 0:3] -= self.dataset_cfg.SHIFT_COOR
+
             pred_dict['name'] = np.array(class_names)[pred_labels - 1]
             pred_dict['score'] = pred_scores
             pred_dict['boxes_lidar'] = pred_boxes
@@ -197,7 +206,71 @@ class NuScenesDataset(DatasetTemplate):
 
         return annos
 
-    def evaluation(self, det_annos, class_names, **kwargs):
+    def kitti_eval(self, eval_det_annos, eval_gt_annos, class_names):
+        from ..kitti.kitti_object_eval_python import eval as kitti_eval
+
+        map_name_to_kitti = {
+            'car': 'Car',
+            'pedestrian': 'Pedestrian',
+            'truck': 'Truck',
+        }
+
+        def transform_to_kitti_format(annos, info_with_fakelidar=False, is_gt=False):
+            for anno in annos:
+                if 'name' not in anno:
+                    anno['name'] = anno['gt_names']
+                    anno.pop('gt_names')
+
+                # @! 对比 kitti_utils.transform_annotations_to_kitti_format, 仅有一处差异，将不在类名映射 map_name_to_kitti 中的类名映射为 Person_sitting, 可以考虑替换
+                # 感觉有 Bug, ST3D 中 'car'/'pedestrian' 没问题，但 'cyc' 会映射为 Person_sitting, 此外此做法也不合理，对于 Nus 中特有的类也错误映射不合理
+                for k in range(anno['name'].shape[0]):
+                    if anno['name'][k] in map_name_to_kitti:
+                        anno['name'][k] = map_name_to_kitti[anno['name'][k]]
+                    else:
+                        anno['name'][k] = 'Person_sitting'
+
+                if 'boxes_lidar' in anno:
+                    gt_boxes_lidar = anno['boxes_lidar'].copy()
+                else:
+                    gt_boxes_lidar = anno['gt_boxes'].copy()
+
+                anno['bbox'] = np.zeros((len(anno['name']), 4))
+                anno['bbox'][:, 2:4] = 50  # [0, 0, 50, 50]
+                anno['truncated'] = np.zeros(len(anno['name']))
+                anno['occluded'] = np.zeros(len(anno['name']))
+
+                if len(gt_boxes_lidar) > 0:
+                    if info_with_fakelidar:
+                        gt_boxes_lidar = box_utils.boxes3d_kitti_fakelidar_to_lidar(gt_boxes_lidar)
+
+                    gt_boxes_lidar[:, 2] -= gt_boxes_lidar[:, 5] / 2
+                    anno['location'] = np.zeros((gt_boxes_lidar.shape[0], 3))
+                    anno['location'][:, 0] = -gt_boxes_lidar[:, 1]  # x = -y_lidar
+                    anno['location'][:, 1] = -gt_boxes_lidar[:, 2]  # y = -z_lidar
+                    anno['location'][:, 2] = gt_boxes_lidar[:, 0]  # z = x_lidar
+                    dxdydz = gt_boxes_lidar[:, 3:6]
+                    anno['dimensions'] = dxdydz[:, [0, 2, 1]]  # lwh ==> lhw
+                    anno['rotation_y'] = -gt_boxes_lidar[:, 6] - np.pi / 2.0
+                    anno['alpha'] = -np.arctan2(-gt_boxes_lidar[:, 1], gt_boxes_lidar[:, 0]) + anno['rotation_y']
+                else:
+                    anno['location'] = anno['dimensions'] = np.zeros((0, 3))
+                    anno['rotation_y'] = anno['alpha'] = np.zeros(0)
+
+        transform_to_kitti_format(eval_det_annos)
+        transform_to_kitti_format(eval_gt_annos, info_with_fakelidar=False, is_gt=True)
+
+        kitti_class_names = []
+        for x in class_names:
+            if x in map_name_to_kitti:
+                kitti_class_names.append(map_name_to_kitti[x])
+            else:
+                kitti_class_names.append('Person_sitting')
+        ap_result_str, ap_dict = kitti_eval.get_official_eval_result(
+            gt_annos=eval_gt_annos, dt_annos=eval_det_annos, current_classes=kitti_class_names
+        )
+        return ap_result_str, ap_dict
+
+    def nuscene_eval(self, det_annos, class_names, **kwargs):
         import json
         from nuscenes.nuscenes import NuScenes
         from . import nuscenes_utils
@@ -251,7 +324,18 @@ class NuScenesDataset(DatasetTemplate):
             metrics = json.load(f)
 
         result_str, result_dict = nuscenes_utils.format_nuscene_results(metrics, self.class_names, version=eval_version)
+
         return result_str, result_dict
+
+    def evaluation(self, det_annos, class_names, **kwargs):
+        if kwargs['eval_metric'] == 'kitti':
+            eval_det_annos = copy.deepcopy(det_annos)
+            eval_gt_annos = copy.deepcopy(self.infos)
+            return self.kitti_eval(eval_det_annos, eval_gt_annos, class_names)
+        elif kwargs['eval_metric'] == 'nuscenes':
+            return self.nuscene_eval(det_annos, class_names, **kwargs)
+        else:
+            raise NotImplementedError
 
     def create_groundtruth_database(self, used_classes=None, max_sweeps=10):
         import torch
