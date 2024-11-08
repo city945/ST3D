@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 
 from ...ops.roiaware_pool3d import roiaware_pool3d_utils
-from ...utils import common_utils, box_utils
+from ...utils import common_utils, box_utils, self_training_utils
 from ..dataset import DatasetTemplate
 
 
@@ -244,8 +244,6 @@ class NuScenesDataset(DatasetTemplate):
                     anno['name'] = anno['gt_names']
                     anno.pop('gt_names')
 
-                # @! 对比 kitti_utils.transform_annotations_to_kitti_format, 仅有一处差异，将不在类名映射 map_name_to_kitti 中的类名映射为 Person_sitting, 可以考虑替换
-                # 感觉有 Bug, ST3D 中 'car'/'pedestrian' 没问题，但 'cyc' 会映射为 Person_sitting, 此外此做法也不合理，对于 Nus 中特有的类也错误映射不合理
                 for k in range(anno['name'].shape[0]):
                     if anno['name'][k] in map_name_to_kitti:
                         anno['name'][k] = map_name_to_kitti[anno['name'][k]]
@@ -256,6 +254,15 @@ class NuScenesDataset(DatasetTemplate):
                     gt_boxes_lidar = anno['boxes_lidar'].copy()
                 else:
                     gt_boxes_lidar = anno['gt_boxes'].copy()
+
+                # filter by fov
+                if is_gt and self.dataset_cfg.get('GT_FILTER', None):
+                    if self.dataset_cfg.GT_FILTER.get('FOV_FILTER', None):
+                        fov_gt_flag = self.extract_fov_gt(
+                            gt_boxes_lidar, self.dataset_cfg['FOV_DEGREE'], self.dataset_cfg['FOV_ANGLE']
+                        )
+                        gt_boxes_lidar = gt_boxes_lidar[fov_gt_flag]
+                        anno['name'] = anno['name'][fov_gt_flag]
 
                 anno['bbox'] = np.zeros((len(anno['name']), 4))
                 anno['bbox'][:, 2:4] = 50  # [0, 0, 50, 50]

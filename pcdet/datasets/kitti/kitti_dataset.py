@@ -5,7 +5,7 @@ import numpy as np
 from skimage import io
 
 from ...ops.roiaware_pool3d import roiaware_pool3d_utils
-from ...utils import box_utils, calibration_kitti, common_utils, object3d_kitti
+from ...utils import box_utils, calibration_kitti, common_utils, object3d_kitti, self_training_utils
 from ..dataset import DatasetTemplate
 
 
@@ -394,6 +394,13 @@ class KittiDataset(DatasetTemplate):
                 'gt_names': gt_names,
                 'gt_boxes': gt_boxes_lidar
             })
+
+            if self.dataset_cfg.get('REMOVE_ORIGIN_GTS', None) and self.training:
+                input_dict['points'] = box_utils.remove_points_in_boxes3d(input_dict['points'], input_dict['gt_boxes'])
+                mask = np.zeros(gt_boxes_lidar.shape[0], dtype=np.bool_)
+                input_dict['gt_boxes'] = input_dict['gt_boxes'][mask]
+                input_dict['gt_names'] = input_dict['gt_names'][mask]
+
             if self.dataset_cfg.get('USE_PSEUDO_LABEL', None) and self.training:
                 input_dict['gt_boxes'] = None
 

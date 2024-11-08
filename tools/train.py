@@ -46,6 +46,7 @@ def parse_config():
     parser.add_argument('--start_epoch', type=int, default=0, help='')
     parser.add_argument('--save_to_file', action='store_true', default=False, help='')
     parser.add_argument('--eval_fov_only', action='store_true', default=False, help='')
+    parser.add_argument('--eval_src', action='store_true', default=False, help='')
     parser.add_argument('--num_epochs_to_eval', type=int, default=30, help='number of checkpoints to be evaluated')
     parser.add_argument('--debug', action='store_true', default=False, help='debug setting')
 
@@ -220,7 +221,7 @@ def main():
     if args.eval_fov_only:
         cfg.DATA_CONFIG_TAR.FOV_POINTS_ONLY = True
 
-    if cfg.get('DATA_CONFIG_TAR', None):
+    if cfg.get('DATA_CONFIG_TAR', None) and not args.eval_src:
         test_set, test_loader, sampler = build_dataloader(
             dataset_cfg=cfg.DATA_CONFIG_TAR,
             class_names=cfg.DATA_CONFIG_TAR.CLASS_NAMES,

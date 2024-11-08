@@ -141,6 +141,14 @@ def train_model_st(model, optimizer, source_loader, target_loader, model_func, l
     if ps_pkl is not None:
         logger.info('==> Loading pseudo labels from {}'.format(ps_pkl))
 
+    # for continue training
+    if cfg.SELF_TRAIN.get('PROG_AUG', None) and cfg.SELF_TRAIN.PROG_AUG.ENABLED and \
+        start_epoch > 0:
+        for cur_epoch in range(start_epoch):
+            if cur_epoch in cfg.SELF_TRAIN.PROG_AUG.UPDATE_AUG:
+                target_loader.dataset.data_augmentor.re_prepare(
+                    augmentor_configs=None, intensity=cfg.SELF_TRAIN.PROG_AUG.SCALE)
+
     with tqdm.trange(start_epoch, total_epochs, desc='epochs', dynamic_ncols=True,
                      leave=(rank == 0)) as tbar:
         total_it_each_epoch = len(target_loader)
@@ -171,6 +179,12 @@ def train_model_st(model, optimizer, source_loader, target_loader, model_func, l
                     leave_pbar=True, ps_label_dir=ps_label_dir, cur_epoch=cur_epoch
                 )
                 target_loader.dataset.train()
+            
+            # curriculum data augmentation
+            if cfg.SELF_TRAIN.get('PROG_AUG', None) and cfg.SELF_TRAIN.PROG_AUG.ENABLED and \
+                (cur_epoch in cfg.SELF_TRAIN.PROG_AUG.UPDATE_AUG):
+                target_loader.dataset.data_augmentor.re_prepare(
+                    augmentor_configs=None, intensity=cfg.SELF_TRAIN.PROG_AUG.SCALE)
 
             accumulated_iter = train_one_epoch_st(
                 model, optimizer, source_reader, target_loader, model_func,

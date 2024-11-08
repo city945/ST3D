@@ -7,7 +7,7 @@ import torch.utils.data as torch_data
 from .augmentor.data_augmentor import DataAugmentor
 from .processor.data_processor import DataProcessor
 from .processor.point_feature_encoder import PointFeatureEncoder
-from ..utils import common_utils, self_training_utils
+from ..utils import common_utils, box_utils, self_training_utils
 from ..ops.roiaware_pool3d import roiaware_pool3d_utils
 
 
@@ -70,6 +70,39 @@ class DatasetTemplate(torch_data.Dataset):
         Returns:
 
         """
+        raise NotImplementedError
+
+    @staticmethod
+    def __vis__(points, gt_boxes, ref_boxes=None, scores=None, use_fakelidar=False):
+        import visual_utils.visualize_utils as vis
+        import mayavi.mlab as mlab
+        gt_boxes = copy.deepcopy(gt_boxes)
+        if use_fakelidar:
+            gt_boxes = box_utils.boxes3d_kitti_lidar_to_fakelidar(gt_boxes)
+
+        if ref_boxes is not None:
+            ref_boxes = copy.deepcopy(ref_boxes)
+            if use_fakelidar:
+                ref_boxes = box_utils.boxes3d_kitti_lidar_to_fakelidar(ref_boxes)
+
+        vis.draw_scenes(points, gt_boxes, ref_boxes=ref_boxes, ref_scores=scores)
+        mlab.show(stop=True)
+
+    @staticmethod
+    def __vis_fake__(points, gt_boxes, ref_boxes=None, scores=None, use_fakelidar=True):
+        import visual_utils.visualize_utils as vis
+        import mayavi.mlab as mlab
+        gt_boxes = copy.deepcopy(gt_boxes)
+        if use_fakelidar:
+            gt_boxes = box_utils.boxes3d_kitti_lidar_to_fakelidar(gt_boxes)
+
+        if ref_boxes is not None:
+            ref_boxes = copy.deepcopy(ref_boxes)
+            if use_fakelidar:
+                ref_boxes = box_utils.boxes3d_kitti_lidar_to_fakelidar(ref_boxes)
+
+        vis.draw_scenes(points, gt_boxes, ref_boxes=ref_boxes, ref_scores=scores)
+        mlab.show(stop=True)
 
     @staticmethod
     def extract_fov_data(points, fov_degree, heading_angle):

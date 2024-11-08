@@ -1,8 +1,17 @@
+import torch
 import numpy as np
+import numba
 import copy
 from ...utils import common_utils
 from ...ops.roiaware_pool3d import roiaware_pool3d_utils
 from ...ops.iou3d_nms import iou3d_nms_utils
+
+import warnings
+try:
+    from numba.errors import NumbaPerformanceWarning
+    warnings.filterwarnings("ignore", category=NumbaPerformanceWarning)
+except:
+    pass
 
 
 def random_flip_along_x(gt_boxes, points):
@@ -78,6 +87,44 @@ def global_scaling(gt_boxes, points, scale_range):
     points[:, :3] *= noise_scale
     gt_boxes[:, :6] *= noise_scale
     return gt_boxes, points
+
+
+def global_sampling(gt_boxes, points, gt_boxes_mask, sample_ratio_range, prob):
+    """
+    Args:
+        gt_boxes: (N, 7), [x, y, z, dx, dy, dz, heading]
+        points: (M, 3 + C)
+        gt_boxes_mask: (N), boolen mask for gt_boxes
+        sample_ratio_range: [min, max]. ratio to keep points remain.
+        prob: prob to dentermine whether sampling this frame
+
+    Returns:
+
+    """
+    if np.random.uniform(0, 1) > prob:
+        return gt_boxes, points, gt_boxes_mask
+
+    num_points = points.shape[0]
+    sample_ratio = np.random.uniform(sample_ratio_range[0], sample_ratio_range[1])
+    remain_points_num = int(num_points * sample_ratio)
+
+    # shuffle points
+    shuffle_idx = np.random.permutation(points.shape[0])
+    points = points[shuffle_idx]
+
+    # sample points
+    points = points[:remain_points_num]
+
+    # mask empty gt_boxes
+    num_points_in_gt = roiaware_pool3d_utils.points_in_boxes_cpu(
+        torch.from_numpy(points[:, :3]),
+        torch.from_numpy(gt_boxes[:, :7])
+    ).numpy().sum(axis=1)
+
+    mask = (num_points_in_gt >= 1)
+    gt_boxes_mask = gt_boxes_mask & mask
+    return gt_boxes, points, gt_boxes_mask
+
 
 def scale_pre_object(gt_boxes, points, gt_boxes_mask, scale_perturb, num_try=50):
     """
