@@ -6,11 +6,12 @@ from torch.nn.utils import clip_grad_norm_
 from pcdet.utils import common_utils
 from pcdet.utils import self_training_utils
 from pcdet.config import cfg
+from pcdet.models.model_utils.dsnorm import set_ds_source, set_ds_target
 
 from .train_utils import save_checkpoint, checkpoint_state
 
 
-def train_one_epoch_st(model, optimizer, target_loader, model_func, lr_scheduler,
+def train_one_epoch_st(model, optimizer, source_reader, target_loader, model_func, lr_scheduler,
                        accumulated_iter, optim_cfg, rank, tbar, total_it_each_epoch,
                        dataloader_iter, tb_log=None, leave_pbar=False, ema_model=None, cur_epoch=None):
     if total_it_each_epoch == len(target_loader):
@@ -40,6 +41,25 @@ def train_one_epoch_st(model, optimizer, target_loader, model_func, lr_scheduler
         model.train()
 
         optimizer.zero_grad()
+        if cfg.SELF_TRAIN.SRC.USE_DATA:
+            # forward source data with labels
+            source_batch = source_reader.read_data()
+
+            if cfg.SELF_TRAIN.get('DSNORM', None):
+                model.apply(set_ds_source)
+
+            if cfg.SELF_TRAIN.SRC.get('SEP_LOSS_WEIGHTS', None):
+                source_batch['SEP_LOSS_WEIGHTS'] = cfg.SELF_TRAIN.SRC.SEP_LOSS_WEIGHTS
+
+            loss, tb_dict, disp_dict = model_func(model, source_batch)
+            loss = cfg.SELF_TRAIN.SRC.get('LOSS_WEIGHT', 1.0) * loss
+            loss.backward()
+            loss_meter.update(loss.item())
+            disp_dict.update({'loss': "{:.3f}({:.3f})".format(loss_meter.val, loss_meter.avg)})
+
+            if not cfg.SELF_TRAIN.SRC.get('USE_GRAD', None):
+                optimizer.zero_grad()
+
         if cfg.SELF_TRAIN.TAR.USE_DATA:
             try:
                 target_batch = next(dataloader_iter)
@@ -48,8 +68,15 @@ def train_one_epoch_st(model, optimizer, target_loader, model_func, lr_scheduler
                 target_batch = next(dataloader_iter)
                 print('new iters')
 
+            if cfg.SELF_TRAIN.get('DSNORM', None):
+                model.apply(set_ds_target)
+
+            if cfg.SELF_TRAIN.TAR.get('SEP_LOSS_WEIGHTS', None):
+                target_batch['SEP_LOSS_WEIGHTS'] = cfg.SELF_TRAIN.TAR.SEP_LOSS_WEIGHTS
+
             # parameters for save pseudo label on the fly
             st_loss, st_tb_dict, st_disp_dict = model_func(model, target_batch)
+            st_loss = cfg.SELF_TRAIN.TAR.get('LOSS_WEIGHT', 1.0) * st_loss
             st_loss.backward()
             st_loss_meter.update(st_loss.item())
 
@@ -105,6 +132,8 @@ def train_model_st(model, optimizer, source_loader, target_loader, model_func, l
                    source_sampler=None, target_sampler=None, lr_warmup_scheduler=None, ckpt_save_interval=1,
                    max_ckpt_save_num=50, merge_all_iters_to_one_epoch=False, logger=None, ema_model=None):
     accumulated_iter = start_iter
+    source_reader = common_utils.DataReader(source_loader, source_sampler)
+    source_reader.construct_iter()
 
     # for continue training.
     # if already exist generated pseudo label result
@@ -124,6 +153,7 @@ def train_model_st(model, optimizer, source_loader, target_loader, model_func, l
         for cur_epoch in tbar:
             if target_sampler is not None:
                 target_sampler.set_epoch(cur_epoch)
+                source_reader.set_cur_epoch(cur_epoch)
 
             # train one epoch
             if lr_warmup_scheduler is not None and cur_epoch < optim_cfg.WARMUP_EPOCH:
@@ -143,7 +173,7 @@ def train_model_st(model, optimizer, source_loader, target_loader, model_func, l
                 target_loader.dataset.train()
 
             accumulated_iter = train_one_epoch_st(
-                model, optimizer, target_loader, model_func,
+                model, optimizer, source_reader, target_loader, model_func,
                 lr_scheduler=cur_scheduler,
                 accumulated_iter=accumulated_iter, optim_cfg=optim_cfg,
                 rank=rank, tbar=tbar, tb_log=tb_log,

@@ -201,6 +201,27 @@ def add_prefix_to_dict(dict, prefix):
     return dict
 
 
+class DataReader(object):
+    def __init__(self, dataloader, sampler):
+        self.dataloader = dataloader
+        self.sampler = sampler
+
+    def construct_iter(self):
+        self.dataloader_iter = iter(self.dataloader)
+
+    def set_cur_epoch(self, cur_epoch):
+        self.cur_epoch = cur_epoch
+
+    def read_data(self):
+        try:
+            return self.dataloader_iter.next()
+        except:
+            if self.sampler is not None:
+                self.sampler.set_epoch(self.cur_epoch)
+            self.construct_iter()
+            return self.dataloader_iter.next()
+
+
 class AverageMeter(object):
     """Computes and stores the average and current value"""
     def __init__(self):
@@ -218,6 +239,11 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
+
+def set_bn_train(m):
+    classname = m.__class__.__name__
+    if classname.find('BatchNorm') != -1:
+        m.train()
 
 
 class NAverageMeter(object):

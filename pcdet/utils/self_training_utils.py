@@ -9,6 +9,7 @@ from pcdet.models import load_data_to_gpu
 from pcdet.utils import common_utils, commu_utils, memory_ensemble_utils
 import pickle as pkl
 import re
+from pcdet.models.model_utils.dsnorm import set_ds_target
 
 
 PSEUDO_LABELS = {}
@@ -82,6 +83,8 @@ def save_pseudo_label_epoch(model, val_loader, rank, leave_pbar, ps_label_dir, c
     pos_ps_nmeter = common_utils.NAverageMeter(len(cfg.CLASS_NAMES))
     ign_ps_nmeter = common_utils.NAverageMeter(len(cfg.CLASS_NAMES))
 
+    if cfg.SELF_TRAIN.get('DSNORM', None):
+        model.apply(set_ds_target)
 
     model.eval()
 
