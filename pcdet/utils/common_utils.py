@@ -14,6 +14,8 @@ import torch.multiprocessing as mp
 def check_numpy_to_torch(x):
     if isinstance(x, np.ndarray):
         return torch.from_numpy(x).float(), True
+    if isinstance(x, np.float64) or isinstance(x, np.float32):
+        return torch.tensor([x]).float(), True
     return x, False
 
 
@@ -84,7 +86,8 @@ def get_voxel_centers(voxel_coords, downsample_times, voxel_size, point_cloud_ra
 def create_logger(log_file=None, rank=0, log_level=logging.INFO):
     logger = logging.getLogger(__name__)
     logger.setLevel(log_level if rank == 0 else 'ERROR')
-    formatter = logging.Formatter('%(asctime)s  %(levelname)5s  %(message)s')
+    formatter = logging.Formatter('[%(asctime)s  %(filename)s %(lineno)d '
+                                  '%(levelname)5s]  %(message)s')
     console = logging.StreamHandler()
     console.setLevel(log_level if rank == 0 else 'ERROR')
     console.setFormatter(formatter)
@@ -101,6 +104,8 @@ def set_random_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -183,7 +188,7 @@ def merge_results_dist(result_part, size, tmpdir):
 
     ordered_results = []
     for res in zip(*part_list):
-        ordered_results.extend(list(res))
+        ordered_results.extend(list(res)) 
     ordered_results = ordered_results[:size]
     shutil.rmtree(tmpdir)
     return ordered_results

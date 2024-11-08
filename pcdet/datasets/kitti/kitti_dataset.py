@@ -100,19 +100,19 @@ class KittiDataset(DatasetTemplate):
         return plane
 
     @staticmethod
-    def get_fov_flag(pts_rect, img_shape, calib):
+    def get_fov_flag(pts_rect, img_shape, calib, margin=0):
         """
         Args:
             pts_rect:
             img_shape:
             calib:
-
+            margin
         Returns:
 
         """
         pts_img, pts_rect_depth = calib.rect_to_img(pts_rect)
-        val_flag_1 = np.logical_and(pts_img[:, 0] >= 0, pts_img[:, 0] < img_shape[1])
-        val_flag_2 = np.logical_and(pts_img[:, 1] >= 0, pts_img[:, 1] < img_shape[0])
+        val_flag_1 = np.logical_and(pts_img[:, 0] >= 0 - margin, pts_img[:, 0] < img_shape[1] + margin)
+        val_flag_2 = np.logical_and(pts_img[:, 1] >= 0 - margin, pts_img[:, 1] < img_shape[0] + margin)
         val_flag_merge = np.logical_and(val_flag_1, val_flag_2)
         pts_valid_flag = np.logical_and(val_flag_merge, pts_rect_depth >= 0)
 
@@ -282,6 +282,15 @@ class KittiDataset(DatasetTemplate):
 
             if self.dataset_cfg.get('SHIFT_COOR', None):
                 pred_boxes[:, 0:3] -= self.dataset_cfg.SHIFT_COOR
+
+            # BOX FILTER
+            if self.dataset_cfg.get('TEST', None) and self.dataset_cfg.TEST.BOX_FILTER['FOV_FILTER']:
+                box_preds_lidar_center = pred_boxes[:, 0:3]
+                pts_rect = calib.lidar_to_rect(box_preds_lidar_center)
+                fov_flag = self.get_fov_flag(pts_rect, image_shape, calib, margin=5)
+                pred_boxes = pred_boxes[fov_flag]
+                pred_labels = pred_labels[fov_flag]
+                pred_scores = pred_scores[fov_flag]
 
             pred_boxes_camera = box_utils.boxes3d_lidar_to_kitti_camera(pred_boxes, calib)
             pred_boxes_img = box_utils.boxes3d_kitti_camera_to_imageboxes(

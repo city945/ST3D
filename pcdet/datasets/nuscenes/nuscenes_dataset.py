@@ -147,15 +147,28 @@ class NuScenesDataset(DatasetTemplate):
             if self.dataset_cfg.get('SHIFT_COOR', None):
                 input_dict['gt_boxes'][:, 0:3] += self.dataset_cfg.SHIFT_COOR
 
-        data_dict = self.prepare_data(data_dict=input_dict)
-
+        if self.dataset_cfg.get('FOV_POINTS_ONLY', None):
+            input_dict['points'] = self.extract_fov_data(
+                input_dict['points'], self.dataset_cfg.FOV_DEGREE, self.dataset_cfg.FOV_ANGLE
+            )
+            if input_dict['gt_boxes'] is not None:
+                fov_gt_flag = self.extract_fov_gt(
+                    input_dict['gt_boxes'], self.dataset_cfg.FOV_DEGREE, self.dataset_cfg.FOV_ANGLE
+                )
+                input_dict.update({
+                    'gt_names': input_dict['gt_names'][fov_gt_flag],
+                    'gt_boxes': input_dict['gt_boxes'][fov_gt_flag],
+                })
         if self.dataset_cfg.get('SET_NAN_VELOCITY_TO_ZEROS', False):
-            gt_boxes = data_dict['gt_boxes']
+            gt_boxes = input_dict['gt_boxes']
             gt_boxes[np.isnan(gt_boxes)] = 0
-            data_dict['gt_boxes'] = gt_boxes
+            input_dict['gt_boxes'] = gt_boxes
 
-        if not self.dataset_cfg.PRED_VELOCITY and 'gt_boxes' in data_dict:
-            data_dict['gt_boxes'] = data_dict['gt_boxes'][:, [0, 1, 2, 3, 4, 5, 6, -1]]
+        # [0, 1, 2, 3, 4, 5, 6, -1] -> [0, 1, 2, 3, 4, 5, 6] 强制去除框的其他属性
+        if not self.dataset_cfg.PRED_VELOCITY and 'gt_boxes' in input_dict:
+            input_dict['gt_boxes'] = input_dict['gt_boxes'][:, [0, 1, 2, 3, 4, 5, 6]]
+
+        data_dict = self.prepare_data(data_dict=input_dict)
 
         return data_dict
 

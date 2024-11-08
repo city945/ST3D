@@ -1,9 +1,7 @@
 from functools import partial
-
 import numpy as np
-
-from ...utils import common_utils
 from . import augmentor_utils, database_sampler
+from ...utils import common_utils
 
 
 class DataAugmentor(object):
@@ -39,7 +37,36 @@ class DataAugmentor(object):
 
     def __setstate__(self, d):
         self.__dict__.update(d)
-   
+
+    def random_object_rotation(self, data_dict=None, config=None):
+        if data_dict is None:
+            return partial(self.random_object_rotation, config=config)
+
+        gt_boxes, points = augmentor_utils.rotate_objects(
+            data_dict['gt_boxes'],
+            data_dict['points'],
+            data_dict['gt_boxes_mask'],
+            rotation_perturb=config['ROT_UNIFORM_NOISE'],
+            prob=config['ROT_PROB'],
+            num_try=50
+        )
+
+        data_dict['gt_boxes'] = gt_boxes
+        data_dict['points'] = points
+        return data_dict
+
+    def random_object_scaling(self, data_dict=None, config=None):
+        if data_dict is None:
+            return partial(self.random_object_scaling, config=config)
+        points, gt_boxes = augmentor_utils.scale_pre_object(
+            data_dict['gt_boxes'], data_dict['points'],
+            gt_boxes_mask=data_dict['gt_boxes_mask'],
+            scale_perturb=config['SCALE_UNIFORM_NOISE']
+        )
+
+        data_dict['gt_boxes'] = gt_boxes
+        data_dict['points'] = points
+        return data_dict
     def random_world_flip(self, data_dict=None, config=None):
         if data_dict is None:
             return partial(self.random_world_flip, config=config)
@@ -73,6 +100,16 @@ class DataAugmentor(object):
             return partial(self.random_world_scaling, config=config)
         gt_boxes, points = augmentor_utils.global_scaling(
             data_dict['gt_boxes'], data_dict['points'], config['WORLD_SCALE_RANGE']
+        )
+        data_dict['gt_boxes'] = gt_boxes
+        data_dict['points'] = points
+        return data_dict
+
+    def normalize_object_size(self, data_dict=None, config=None):
+        if data_dict is None:
+            return partial(self.normalize_object_size, config=config)
+        points, gt_boxes = augmentor_utils.normalize_object_size(
+            data_dict['gt_boxes'], data_dict['points'], data_dict['gt_boxes_mask'], config['SIZE_RES']
         )
         data_dict['gt_boxes'] = gt_boxes
         data_dict['points'] = points

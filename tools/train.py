@@ -1,14 +1,15 @@
+import _init_path
+import os
+from pathlib import Path
 import argparse
 import datetime
 import glob
-import os
-from pathlib import Path
-from test import repeat_eval_ckpt
 
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 from tensorboardX import SummaryWriter
+import torch.distributed as dist
+from test import repeat_eval_ckpt
 
 from pcdet.config import cfg, cfg_from_list, cfg_from_yaml_file, log_config_to_file
 from pcdet.datasets import build_dataloader
@@ -22,7 +23,7 @@ def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
     parser.add_argument('--cfg_file', type=str, default=None, help='specify the config for training')
 
-    parser.add_argument('--batch_size', type=int, default=None, required=False, help='batch size for training')
+    parser.add_argument('--batch_size', type=int, default=16, required=False, help='batch size for training')
     parser.add_argument('--epochs', type=int, default=None, required=False, help='number of epochs to train for')
     parser.add_argument('--workers', type=int, default=4, help='number of workers for dataloader')
     parser.add_argument('--extra_tag', type=str, default='default', help='extra tag for this experiment')
@@ -42,6 +43,8 @@ def parse_config():
     parser.add_argument('--max_waiting_mins', type=int, default=0, help='max waiting minutes')
     parser.add_argument('--start_epoch', type=int, default=0, help='')
     parser.add_argument('--save_to_file', action='store_true', default=False, help='')
+    parser.add_argument('--eval_fov_only', action='store_true', default=False, help='')
+    parser.add_argument('--num_epochs_to_eval', type=int, default=30, help='number of checkpoints to be evaluated')
     parser.add_argument('--debug', action='store_true', default=False, help='debug setting')
 
     args = parser.parse_args()
@@ -109,7 +112,7 @@ def main():
     tb_log = SummaryWriter(log_dir=str(output_dir / 'tensorboard')) if cfg.LOCAL_RANK == 0 else None
 
     # -----------------------create dataloader & network & optimizer---------------------------
-    train_set, train_loader, train_sampler = build_dataloader(
+    source_set, source_loader, source_sampler = build_dataloader(
         dataset_cfg=cfg.DATA_CONFIG,
         class_names=cfg.CLASS_NAMES,
         batch_size=args.batch_size,
@@ -119,14 +122,16 @@ def main():
         merge_all_iters_to_one_epoch=args.merge_all_iters_to_one_epoch,
         total_epochs=args.epochs
     )
+    target_set = target_loader = target_sampler = None
 
-    model = build_network(model_cfg=cfg.MODEL, num_class=len(cfg.CLASS_NAMES), dataset=train_set)
+    model = build_network(model_cfg=cfg.MODEL, num_class=len(cfg.CLASS_NAMES),
+                          dataset=source_set)
+
     if args.sync_bn:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model.cuda()
 
     optimizer = build_optimizer(model, cfg.OPTIMIZATION)
-
     # load checkpoint if it is possible
     start_epoch = it = 0
     last_epoch = -1
@@ -151,7 +156,7 @@ def main():
     logger.info(model)
 
     lr_scheduler, lr_warmup_scheduler = build_scheduler(
-        optimizer, total_iters_each_epoch=len(train_loader), total_epochs=args.epochs,
+        optimizer, total_iters_each_epoch=len(source_loader), total_epochs=args.epochs,
         last_epoch=last_epoch, optim_cfg=cfg.OPTIMIZATION
     )
 
@@ -161,7 +166,8 @@ def main():
     train_model(
         model,
         optimizer,
-        train_loader,
+        source_loader,
+        target_loader,
         model_func=model_fn_decorator(),
         lr_scheduler=lr_scheduler,
         optim_cfg=cfg.OPTIMIZATION,
@@ -171,11 +177,13 @@ def main():
         rank=cfg.LOCAL_RANK,
         tb_log=tb_log,
         ckpt_save_dir=ckpt_dir,
-        train_sampler=train_sampler,
+        source_sampler=source_sampler,
+        target_sampler=target_sampler,
         lr_warmup_scheduler=lr_warmup_scheduler,
         ckpt_save_interval=args.ckpt_save_interval,
         max_ckpt_save_num=args.max_ckpt_save_num,
-        merge_all_iters_to_one_epoch=args.merge_all_iters_to_one_epoch
+        merge_all_iters_to_one_epoch=args.merge_all_iters_to_one_epoch,
+        logger=logger,
     )
 
     logger.info('**********************End training %s/%s(%s)**********************\n\n\n'
@@ -183,15 +191,29 @@ def main():
 
     logger.info('**********************Start evaluation %s/%s(%s)**********************' %
                 (cfg.EXP_GROUP_PATH, cfg.TAG, args.extra_tag))
-    test_set, test_loader, sampler = build_dataloader(
-        dataset_cfg=cfg.DATA_CONFIG,
-        class_names=cfg.CLASS_NAMES,
-        batch_size=args.batch_size,
-        dist=dist_train, workers=args.workers, logger=logger, training=False
-    )
+
+    if args.eval_fov_only:
+        cfg.DATA_CONFIG_TAR.FOV_POINTS_ONLY = True
+
+    if cfg.get('DATA_CONFIG_TAR', None):
+        test_set, test_loader, sampler = build_dataloader(
+            dataset_cfg=cfg.DATA_CONFIG_TAR,
+            class_names=cfg.DATA_CONFIG_TAR.CLASS_NAMES,
+            batch_size=args.batch_size,
+            dist=dist_train, workers=args.workers, logger=logger, training=False
+        )
+    else:
+        test_set, test_loader, sampler = build_dataloader(
+            dataset_cfg=cfg.DATA_CONFIG,
+            class_names=cfg.CLASS_NAMES,
+            batch_size=args.batch_size,
+            dist=dist_train, workers=args.workers, logger=logger, training=False
+        )
+
     eval_output_dir = output_dir / 'eval' / 'eval_with_train'
     eval_output_dir.mkdir(parents=True, exist_ok=True)
-    args.start_epoch = max(args.epochs - 10, 0)  # Only evaluate the last 10 epochs
+    # Only evaluate the last args.num_epochs_to_eval epochs
+    args.start_epoch = max(args.epochs - args.num_epochs_to_eval, 0)
 
     repeat_eval_ckpt(
         model.module if dist_train else model,
