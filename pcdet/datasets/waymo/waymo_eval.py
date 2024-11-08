@@ -2,6 +2,7 @@
 # Reference https://github.com/open-mmlab/OpenPCDet
 # Written by Shaoshuai Shi, Chaoxu Guo
 # All Rights Reserved 2019-2020.
+# @tag diff 不会使用到 waymo_eval
 
 
 import numpy as np

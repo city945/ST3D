@@ -194,6 +194,7 @@ class DataBaseSampler(object):
         if total_valid_sampled_dict.__len__() > 0:
             data_dict = self.add_sampled_boxes_to_scene(data_dict, sampled_gt_boxes, total_valid_sampled_dict)
 
+        # 可忽略修改，ST3D 实验中未使用 gt_sampling
         # data_dict.pop('gt_boxes_mask')
         data_dict['gt_boxes_mask'] = np.ones(data_dict['gt_boxes'].shape[0], dtype=np.bool_)
         return data_dict
